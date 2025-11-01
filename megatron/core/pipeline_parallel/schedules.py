@@ -2,7 +2,7 @@
 
 import contextlib
 from functools import partial
-from typing import Callable, Iterator, List, Optional, Union
+from typing import TYPE_CHECKING, Callable, Iterator, List, Optional, Union
 
 import torch
 from torch.autograd.variable import Variable
@@ -35,6 +35,9 @@ from .combined_1f1b import (
 
 # Types
 Shape = Union[List[int], torch.Size]
+
+if TYPE_CHECKING:
+    from megatron.core.pipeline_parallel.p2p_communication import P2PCommunicator
 
 
 def get_forward_backward_func():
