@@ -1,5 +1,7 @@
 # Copyright (c) 2022, NVIDIA CORPORATION. All rights reserved.
 
+from __future__ import annotations
+
 import contextlib
 from functools import partial
 from typing import TYPE_CHECKING, Callable, Iterator, List, Optional, Union
