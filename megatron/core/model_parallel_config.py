@@ -296,8 +296,29 @@ class ModelParallelConfig:
 
     overlap_p2p_comm_warmup_flush: bool = False
     """If true, overlap communication and computation in warm up and flush phase.
-       Only valid when overlap_p2p_comm is True and batch_p2p_comm is False. 
+       Only valid when overlap_p2p_comm is True and batch_p2p_comm is False.
        Defaults to False.
+    """
+
+    ###################
+    # Adaptive Pipeline Monitoring
+    ###################
+    enable_p2p_monitoring: bool = False
+    """Enable network monitoring for adaptive pipeline parallelism. When enabled, monitors
+       bandwidth and latency of P2P communications using CUDA events with minimal overhead.
+       Used to provide real-time network metrics for adaptive optimization decisions.
+    """
+
+    p2p_monitoring_sample_rate: float = 0.1
+    """Fraction of P2P operations to monitor (0.0 to 1.0). Lower values reduce overhead
+       but provide less frequent updates. Recommended: 0.1 (10%) for <0.5% overhead.
+       Only used when enable_p2p_monitoring is True.
+    """
+
+    enable_initial_profiling: bool = False
+    """Enable initial network profiling at job startup. When enabled, performs topology
+       discovery and bandwidth measurements before training begins. Takes 30-60 seconds
+       but provides valuable baseline network information for pipeline stage assignment.
     """
 
     microbatch_group_size_per_vp_stage: Optional[int] = None

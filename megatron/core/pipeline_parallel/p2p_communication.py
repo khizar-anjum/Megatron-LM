@@ -643,3 +643,31 @@ class P2PCommunicator:
         if config.timers is not None:
             config.timers('forward-backward-send-forward-backward-recv').stop()
         return input_tensor, output_tensor_grad
+
+
+def create_p2p_communicator(pp_group: dist.ProcessGroup, config):
+    """Factory function to create appropriate P2P communicator.
+
+    Creates a MonitoredP2PCommunicator if monitoring is enabled in config,
+    otherwise returns a standard P2PCommunicator.
+
+    Args:
+        pp_group: Pipeline parallel process group
+        config: ModelParallelConfig with optional monitoring settings
+
+    Returns:
+        P2PCommunicator or MonitoredP2PCommunicator instance
+    """
+    enable_monitoring = getattr(config, 'enable_p2p_monitoring', False)
+
+    if enable_monitoring:
+        from .monitored_p2p_communication import MonitoredP2PCommunicator
+        sample_rate = getattr(config, 'p2p_monitoring_sample_rate', 0.1)
+        return MonitoredP2PCommunicator(
+            pp_group=pp_group,
+            config=config,
+            enable_monitoring=True,
+            sample_rate=sample_rate
+        )
+    else:
+        return P2PCommunicator(pp_group=pp_group, config=config)

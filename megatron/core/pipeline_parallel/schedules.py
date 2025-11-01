@@ -9,7 +9,7 @@ from torch.autograd.variable import Variable
 
 from megatron.core import parallel_state
 from megatron.core.enums import ModelType
-from megatron.core.pipeline_parallel.p2p_communication import P2PCommunicator
+from megatron.core.pipeline_parallel.p2p_communication import create_p2p_communicator
 from megatron.core.pipeline_parallel.utils import (
     is_pp_first_stage,
     is_pp_last_stage,
@@ -838,7 +838,7 @@ def forward_backward_pipelining_with_interleaving(
 
     config = get_model_config(model[0])
     if p2p_communicator is None and pg_collection is None:
-        p2p_communicator = P2PCommunicator(
+        p2p_communicator = create_p2p_communicator(
             pp_group=parallel_state.get_pipeline_model_parallel_group(), config=config
         )
         tp_group = parallel_state.get_tensor_model_parallel_group()
@@ -1983,7 +1983,7 @@ def forward_backward_pipelining_without_interleaving(
         )
 
     if p2p_communicator is None and pg_collection is None:
-        p2p_communicator = P2PCommunicator(
+        p2p_communicator = create_p2p_communicator(
             pp_group=parallel_state.get_pipeline_model_parallel_group(), config=config
         )
         tp_group = parallel_state.get_tensor_model_parallel_group()
