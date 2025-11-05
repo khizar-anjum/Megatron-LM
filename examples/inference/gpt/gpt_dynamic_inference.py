@@ -1,4 +1,4 @@
-# Copyright (c) 2025, NVIDIA CORPORATION. All rights reserved.
+# Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 
 import hashlib
 import json
@@ -11,7 +11,7 @@ from argparse import ArgumentParser
 from collections import defaultdict
 from functools import partial
 from tqdm import tqdm
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import torch
 from tqdm import tqdm
@@ -81,6 +81,7 @@ def add_dynamic_inference_args(parser: ArgumentParser) -> ArgumentParser:
         "--termination-id", type=int, default=None,
         help="Termination ID that overrides `tokenizer.eod`."
     )
+    group.add_argument('--inference-repeat-n', type=int, default=1, help="Repeat inference iterations N times for benchmarking.")
 
     return parser
 
@@ -116,8 +117,11 @@ def get_model() -> MegatronModule:
     return model
 
 
-def get_inference_context(requests: List[Request], sampling_params: SamplingParams, 
-                          calculate_max_sequence_length_from_requests: bool =True):
+def get_inference_context(
+    requests: List[Request],
+    sampling_params: Optional[SamplingParams] = None,
+    calculate_max_sequence_length_from_requests: bool = True
+):
     """The inference context manages the KV cache and other inference state."""
 
     args = get_args()
@@ -128,6 +132,10 @@ def get_inference_context(requests: List[Request], sampling_params: SamplingPara
         max_sequence_length = max_context_length + max_gen_length
     else:
         max_sequence_length = args.inference_max_seq_length
+
+    metrics_writer = None
+    if args.inference_wandb_logging_step_interval > 0:
+        metrics_writer = get_wandb_writer()
 
     # Inference context.
     context = DynamicInferenceContext(
@@ -143,7 +151,7 @@ def get_inference_context(requests: List[Request], sampling_params: SamplingPara
             if args.cuda_graph_impl == "local"
             else None
         ),
-        chunk_size_tokens=args.inference_dynamic_batching_chunk_size,
+        block_size_tokens=args.inference_dynamic_batching_block_size,
         buffer_size_gb=args.inference_dynamic_batching_buffer_size_gb,
         buffer_guaranteed_fraction=args.inference_dynamic_batching_buffer_guaranteed_fraction,
         buffer_overflow_factor=args.inference_dynamic_batching_buffer_overflow_factor,
@@ -154,8 +162,10 @@ def get_inference_context(requests: List[Request], sampling_params: SamplingPara
         cache_mla_latent=args.multi_latent_attention and args.cache_mla_latents,
         kv_lora_rank=args.kv_lora_rank if args.multi_latent_attention else None,
         qk_pos_emb_head_dim=args.qk_pos_emb_head_dim,
+        use_cuda_graphs_for_non_decode_steps=not args.decode_only_cuda_graphs,
         use_flashinfer_fused_rope=args.use_flashinfer_fused_rope,
         unified_memory_level=args.inference_dynamic_batching_unified_memory_level,
+        metrics_writer=metrics_writer,
     )
 
     return context
@@ -168,7 +178,7 @@ def get_inference_controller(
 
     Args:
         model (MegatronModule): Megatron GPT model.
-        context (DynamicInferenceContext): Context for managing KV cache.
+        context (DynamicInferenceContext): Context for managing KV cache blocks.
 
     Return:
         (TextGenerationController) Inference text generation controller.
@@ -197,18 +207,27 @@ def get_inference_controller(
 
 
 def run_inference(
-    requests: List[Request], sampling_params: SamplingParams, engine: DynamicInferenceEngine
+    requests: List[Request],
+    engine: DynamicInferenceEngine,
+    sampling_params: Optional[SamplingParams] = None,
 ) -> List[Dict[str, float]]:
     """Add requests to engine and generate tokens.
 
     Args:
         requests (List[Request]): Requests that are to be added and processed.
-        sampling_params (SamplingParams): Sampling params for the logits.
         engine (DynamicInferenceEngine): Inference engine that manages generating tokens.
+        sampling_params (SamplingParams): Deprecated as of megatron-core 0.16.
 
     Return:
         A dictionary of step times with `prefill` and `decode` keys.
     """
+
+    if sampling_params is not None and torch.distributed.get_rank() == 0:
+        warnings.warn(
+            "The `sampling_params` argument is deprecated. "
+            "Sampling parameters are specified per request.",
+            DeprecationWarning,
+        )
 
     args = get_args()
 
@@ -242,7 +261,7 @@ def run_inference(
         engine.add_request(
             num_requests_added,
             _request.prompt_text,
-            sampling_params.num_tokens_to_generate,
+            _request.sampling_params,
         )
         _request.time_start = get_curr_time()
         _request.state = "started"
@@ -269,7 +288,7 @@ def run_inference(
 
         # Step inference engine (i.e., generate a token for each active request).
         # Before step, we haven't done the scheduling, so we cannot know the is_decode_only
-        result = engine.step_modern(sampling_params, verbose=True)
+        result = engine.step_modern(verbose=True)
         # After step, we lost track of last iteration's is_decode_only, so we need to get it from the engine
         is_decode_only = engine.is_decode_only 
         step_id += 1
@@ -299,7 +318,7 @@ def run_inference(
                 request.output_text = finished_request.generated_text
                 request.state = "finished"
                 request.request_id = finished_request.request_id
-                if sampling_params.return_log_probs:
+                if finished_request.sampling_params.return_log_probs:
                     request.log_probs = (
                         finished_request.prompt_log_probs + finished_request.generated_log_probs
                     )
@@ -347,11 +366,12 @@ def main():
         top_p=args.top_p,
         return_log_probs=args.return_log_probs,
         num_tokens_to_generate=args.num_tokens_to_generate,
+        termination_id=args.termination_id if args.termination_id is not None else tokenizer.eod,
     )
 
     # Requests, context, conroller.
     model = get_model()
-    requests = build_requests(args, tokenizer)
+    requests = build_requests(args, tokenizer, sampling_params)
     context = get_inference_context(requests, sampling_params)
     controller = get_inference_controller(model, context)
 
@@ -369,11 +389,11 @@ def main():
     engine = DynamicInferenceEngine(
         controller,
         context,
-        termination_id=args.termination_id if args.termination_id is not None else tokenizer.eod,
         enable_cuda_graph=args.cuda_graph_impl == "local",
         random_seed=args.seed,
         track_paused_request_events=args.inference_dynamic_batching_track_paused_request_events,
         enable_chunked_prefill=not args.disable_chunked_prefill,
+        inference_logging_step_interval=args.inference_wandb_logging_step_interval,
     )
 
     setup_prefix = build_dynamic_engine_setup_prefix(args, model, context, requests)
@@ -381,15 +401,20 @@ def main():
     print(setup_prefix)
     print("~~~")
 
-    # Run and time test.
-    t = get_curr_time()
-    result = run_inference(requests, sampling_params, engine)
-    step_times = result["step_times"]
-    add_times = result["add_times"]
-    output_times = result["output_times"]
-    total_output_tokens = result["total_output_tokens"]
-    torch.cuda.synchronize()
-    total_time = get_curr_time() - t
+    # Run and time test, optionally `args.inference_repeat_n` times.
+    throughputs = []
+    for _ in range(args.inference_repeat_n):
+        t = get_curr_time()
+        result = run_inference(requests, engine)
+        step_times = result["step_times"]
+        add_times = result["add_times"]
+        output_times = result["output_times"]
+        total_output_tokens = result["total_output_tokens"]
+        torch.cuda.synchronize()
+        total_time = get_curr_time() - t
+        stats = torch.cuda.memory_stats()
+        throughput = total_output_tokens / total_time
+        throughputs.append(throughput)
 
     # Validate all requests finished.
     for request in requests:
@@ -441,25 +466,28 @@ def main():
             json_results = {}
 
             # Write every 'n' requests, plus the final request.
-            for req in [ *requests[::args.output_every_n_results], requests[-1] ]:
-                result_dict = {
-                    "input_prompt": req.prompt_text,
-                    "generated_text": req.output_text,
-                    "generated_tokens": req.output_tokens,
-                    "latency": req.time_end - req.time_start,
-                    "cuda_graph_request_count_map" : result["cuda_graph_request_count_map"],
-                    "step_count" : engine.step_count,
-                }
-                if sampling_params.return_log_probs:
-                    response_logprobs = req.log_probs
-                    result_dict["logprobs"] = response_logprobs
-                json_results[req.request_id] = result_dict
+            for i, req in enumerate(requests):
+                if i % args.output_every_n_results == 0 or i == len(requests) - 1:
+                    result_dict = {
+                        "input_prompt": req.prompt_text,
+                        "generated_text": req.output_text,
+                        "generated_tokens": req.output_tokens,
+                        "latency": req.time_end - req.time_start,
+                        "cuda_graph_request_count_map" : result["cuda_graph_request_count_map"],
+                        "step_count" : engine.step_count,
+                    }
+                    if req.sampling_params.return_log_probs:
+                        response_logprobs = req.log_probs
+                        result_dict["logprobs"] = response_logprobs
+                    json_results[req.request_id] = result_dict
+
+            # Track system-level throughput as a test / debug metric
+            json_results["throughput"] = throughputs
+
             with open(args.output_path, "w") as fp:
                 json.dump(json_results, fp, indent=1)
 
     # Timing results.
-    stats = torch.cuda.memory_stats()
-    throughput = total_output_tokens / total_time
     print("~~~")
     peak_alloc_gb = stats["allocated_bytes.all.peak"] / 1024**3
     peak_resvd_gb = stats["reserved_bytes.all.peak"] / 1024**3
@@ -487,7 +515,7 @@ def main():
     #     f"count [ p {p_count}, d {d_count} ]."
     # )
     capture_str = (
-        f"{engine.capture_stats["time"]:.2f} sec"
+        f"{engine.capture_stats['time']:.2f} sec"
         if engine.capture_stats else
         "--"
     )
