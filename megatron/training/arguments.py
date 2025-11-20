@@ -85,6 +85,7 @@ def add_megatron_arguments(parser: argparse.ArgumentParser):
     parser = _add_msc_args(parser)
     parser = _add_kitchen_quantization_arguments(parser)
     parser = _add_sft_args(parser)
+    parser = _add_profiling_args(parser)
 
     return parser
 
@@ -3373,6 +3374,22 @@ def _add_kitchen_quantization_arguments(parser: argparse.ArgumentParser):
 def _add_sft_args(parser):
     group = parser.add_argument_group(title='sft')
     group.add_argument('--sft', action="store_true", help='Megatron SFT training')
-    group.add_argument('--sft-tokenizer-prompt-format', type=str, default="nemotron-h-aligned", 
+    group.add_argument('--sft-tokenizer-prompt-format', type=str, default="nemotron-h-aligned",
                        help='SFT prompt format.')
+    return parser
+
+def _add_profiling_args(parser):
+    """Add arguments for adaptive pipeline profiling."""
+    group = parser.add_argument_group(title='adaptive profiling')
+
+    group.add_argument('--enable-initial-profiling', action='store_true',
+                       help='Enable initial network profiling at job startup. '
+                       'Performs topology discovery and bandwidth measurements '
+                       'before training begins (takes 30-60 seconds).')
+    group.add_argument('--enable-p2p-monitoring', action='store_true',
+                       help='Enable runtime P2P communication monitoring. '
+                       'Tracks bandwidth and latency during training with minimal overhead.')
+    group.add_argument('--p2p-monitoring-sample-rate', type=float, default=0.1,
+                       help='Fraction of P2P operations to monitor (0.0-1.0). '
+                       'Default: 0.1 (10%%) for <0.5%% overhead.')
     return parser
