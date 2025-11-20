@@ -4,7 +4,7 @@
 import random
 import time
 from collections import deque
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 
 import torch
 import torch.distributed as dist
