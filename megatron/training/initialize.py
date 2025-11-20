@@ -165,6 +165,24 @@ def initialize_megatron(
             # TODO: Should this be activated with just decoder-tp-comm-overlap too?
             _initialize_tp_communicators()
 
+        # Run initial network profiling if enabled
+        if args.enable_initial_profiling:
+            from megatron.core.pipeline_parallel.initial_profiling import run_initial_profiling
+            from megatron.training import print_rank_0
+
+            print_rank_0("\n" + "=" * 70)
+            print_rank_0("Starting initial network profiling...")
+            print_rank_0("=" * 70 + "\n")
+
+            topology = run_initial_profiling(
+                enable_profiling=True,
+                verbose=(torch.distributed.get_rank() == 0)
+            )
+
+            print_rank_0("\n" + "=" * 70)
+            print_rank_0("Initial profiling complete!")
+            print_rank_0("=" * 70 + "\n")
+
         # No continuation function
         return None
 
