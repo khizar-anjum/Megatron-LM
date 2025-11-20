@@ -10,6 +10,7 @@ import torch
 import torch.distributed as dist
 
 from .p2p_communication import P2PCommunicator
+from .monitoring_stats_collector import get_monitoring_collector
 
 
 class NetworkMonitor:
@@ -168,8 +169,13 @@ class NetworkMonitor:
             'avg_latency_ms': (
                 sum(self.latency_history) / len(self.latency_history)
                 if self.latency_history else None
-            )
+            ),
+            'timestamp': time.time()
         }
+
+
+# Global registry for P2P communicators (for stats collection)
+_global_communicators = []
 
 
 class MonitoredP2PCommunicator(P2PCommunicator):
@@ -202,6 +208,10 @@ class MonitoredP2PCommunicator(P2PCommunicator):
         # Debug counters
         self.total_calls = 0
         self.monitored_calls = 0
+
+        # Register this communicator globally
+        if enable_monitoring:
+            _global_communicators.append(self)
 
     def _communicate(
         self,
@@ -303,3 +313,43 @@ class MonitoredP2PCommunicator(P2PCommunicator):
             'sample_rate': self.sample_rate
         })
         return stats
+
+
+def get_all_communicator_stats() -> List[Dict[str, Any]]:
+    """Get stats from all registered P2P communicators.
+
+    Returns:
+        List of stats dictionaries from all communicators
+    """
+    stats_list = []
+    for comm in _global_communicators:
+        stats = comm.get_network_stats()
+        if stats is not None:
+            stats_list.append(stats)
+    return stats_list
+
+
+def get_aggregated_stats() -> Optional[Dict[str, Any]]:
+    """Get aggregated stats across all communicators.
+
+    Returns:
+        Dictionary with averaged stats or None if no data
+    """
+    all_stats = get_all_communicator_stats()
+    if not all_stats:
+        return None
+
+    # Filter out None values and aggregate
+    bandwidths = [s['bandwidth_gbps'] for s in all_stats if s.get('bandwidth_gbps') is not None]
+    latencies = [s['latency_ms'] for s in all_stats if s.get('latency_ms') is not None]
+    total_calls = sum(s.get('total_calls', 0) for s in all_stats)
+    monitored_calls = sum(s.get('monitored_calls', 0) for s in all_stats)
+
+    return {
+        'bandwidth_gbps': sum(bandwidths) / len(bandwidths) if bandwidths else None,
+        'latency_ms': sum(latencies) / len(latencies) if latencies else None,
+        'total_calls': total_calls,
+        'monitored_calls': monitored_calls,
+        'num_communicators': len(all_stats),
+        'timestamp': time.time()
+    }

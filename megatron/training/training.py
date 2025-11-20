@@ -1666,6 +1666,49 @@ def training_log(
         # Log timers to stdout
         timers.log(timers_to_log, normalizer=args.log_interval)
 
+        # Log P2P monitoring stats if enabled
+        if args.enable_p2p_monitoring and iteration % args.log_interval == 0:
+            try:
+                from megatron.core.pipeline_parallel.monitored_p2p_communication import get_aggregated_stats
+                import json
+                import os
+
+                stats = get_aggregated_stats()
+                if stats is not None:
+                    bw = stats.get('bandwidth_gbps')
+                    lat = stats.get('latency_ms')
+                    monitored = stats.get('monitored_calls', 0)
+                    total = stats.get('total_calls', 0)
+
+                    # Log to stdout
+                    monitor_log = f'[P2P Monitoring] iteration {iteration} |'
+                    if bw is not None:
+                        monitor_log += f' bandwidth: {bw:.2f} GB/s |'
+                    if lat is not None:
+                        monitor_log += f' latency: {lat:.2f} ms |'
+                    if total > 0:
+                        sample_pct = (monitored / total) * 100 if monitored else 0
+                        monitor_log += f' sampled: {monitored}/{total} ({sample_pct:.1f}%) |'
+
+                    print_rank_0(monitor_log)
+
+                    # Export to JSON file for plotting
+                    if torch.distributed.get_rank() == 0:
+                        monitoring_dir = os.path.join(args.save, 'monitoring')
+                        os.makedirs(monitoring_dir, exist_ok=True)
+                        monitoring_file = os.path.join(monitoring_dir, 'runtime_monitoring.jsonl')
+
+                        # Append to JSONL file (one JSON object per line)
+                        with open(monitoring_file, 'a') as f:
+                            stats['iteration'] = iteration
+                            json.dump(stats, f)
+                            f.write('\n')
+
+            except Exception as e:
+                # Only log error on rank 0 for debugging
+                if torch.distributed.get_rank() == 0:
+                    print(f'Warning: P2P monitoring logging failed: {e}')
+
     return report_memory_flag
 
 
