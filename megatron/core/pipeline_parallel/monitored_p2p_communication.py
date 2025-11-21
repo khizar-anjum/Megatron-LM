@@ -3,6 +3,7 @@
 
 import random
 import time
+import weakref
 from collections import deque
 from typing import Optional, Dict, Any, List
 
@@ -209,9 +210,10 @@ class MonitoredP2PCommunicator(P2PCommunicator):
         self.total_calls = 0
         self.monitored_calls = 0
 
-        # Register this communicator globally
+        # Register this communicator globally using weak reference
+        # This prevents memory leaks when communicators are recreated
         if enable_monitoring:
-            _global_communicators.append(self)
+            _global_communicators.append(weakref.ref(self))
 
     def _communicate(
         self,
@@ -322,10 +324,19 @@ def get_all_communicator_stats() -> List[Dict[str, Any]]:
         List of stats dictionaries from all communicators
     """
     stats_list = []
-    for comm in _global_communicators:
-        stats = comm.get_network_stats()
-        if stats is not None:
-            stats_list.append(stats)
+    # Clean up dead weak references and collect stats from alive communicators
+    alive_communicators = []
+    for comm_ref in _global_communicators:
+        comm = comm_ref()  # Dereference the weak reference
+        if comm is not None:  # Communicator still alive
+            alive_communicators.append(comm_ref)
+            stats = comm.get_network_stats()
+            if stats is not None:
+                stats_list.append(stats)
+
+    # Update global list to only contain alive communicators
+    _global_communicators[:] = alive_communicators
+
     return stats_list
 
 
