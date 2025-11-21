@@ -1694,7 +1694,20 @@ def training_log(
                     if torch.distributed.get_rank() == 0:
                         monitoring_dir = os.path.join(args.save, 'monitoring')
                         os.makedirs(monitoring_dir, exist_ok=True)
-                        monitoring_file = os.path.join(monitoring_dir, 'runtime_monitoring.jsonl')
+
+                        # Create unique filename with timestamp for each run
+                        import datetime
+                        if not hasattr(args, '_monitoring_file'):
+                            timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+                            # Try to get SLURM job ID if available
+                            import os as os_module
+                            job_id = os_module.environ.get('SLURM_JOB_ID', timestamp)
+                            args._monitoring_file = os.path.join(
+                                monitoring_dir,
+                                f'runtime_monitoring_{job_id}.jsonl'
+                            )
+
+                        monitoring_file = args._monitoring_file
 
                         # Append to JSONL file (one JSON object per line)
                         with open(monitoring_file, 'a') as f:
