@@ -115,7 +115,7 @@ fi
 MODEL_PARALLEL_ARGS=(
     --tensor-model-parallel-size $TP_SIZE
     --context-parallel-size $CP_SIZE
-    # --pipeline-model-parallel-size $PP_SIZE # Not explicitly set in llama script options, assume 1 if not multi-node PP
+    --pipeline-model-parallel-size $PP_SIZE
     --sequence-parallel  # Always enable sequence parallelism with TP_SIZE=2
 )
 

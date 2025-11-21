@@ -1624,10 +1624,8 @@ def training_log(
             mpu.is_pipeline_first_stage(ignore_virtual=True)
             or mpu.is_pipeline_last_stage(ignore_virtual=True)
         ):
-            assert decoupled_learning_rate is not None
-            log_string += f' decoupled learning rate: {decoupled_learning_rate:.6E} |'
-        else:
-            assert decoupled_learning_rate is None
+            if decoupled_learning_rate is not None:
+                log_string += f' decoupled learning rate: {decoupled_learning_rate:.6E} |'
         log_string += f' global batch size: {batch_size:5d} |'
         for key in total_loss_dict:
             if key not in [advanced_iters_key, skipped_iters_key, nan_iters_key]:
