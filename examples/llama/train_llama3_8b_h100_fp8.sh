@@ -30,15 +30,27 @@ WORLD_SIZE=$(($GPUS_PER_NODE*$NUM_NODES))
 PRETRAIN_SCRIPT_PATH="pretrain_gpt.py"
 
 # Fixed model and training parameters
-TP_SIZE=1     
-CP_SIZE=1     
-PP_SIZE=1     
-MICRO_BATCH_SIZE=1
-GLOBAL_BATCH_SIZE=128
-NUM_LAYERS=32  
-DTYPE="fp8"
+TP_SIZE=1
+CP_SIZE=1
+PP_SIZE=1
+MICRO_BATCH_SIZE=4  # Set this to desired micro-batch size
+GRADIENT_ACCUMULATION_STEPS=32  # Set this to desired gradient accumulation steps
+NUM_LAYERS=32
+DTYPE="bf16"  # Changed from fp8 - FP8 requires H100 (compute 8.9+), Perlmutter has A100 (compute 8.0)
 SEQ_LENGTH=8192
 MAX_POSITION_EMBEDDINGS=8192
+
+# Auto-calculate GLOBAL_BATCH_SIZE based on parallelism
+# Formula: GLOBAL_BATCH_SIZE = MICRO_BATCH_SIZE × DP_SIZE × GRADIENT_ACCUMULATION_STEPS
+# where DP_SIZE = WORLD_SIZE / (TP_SIZE × CP_SIZE × PP_SIZE)
+DP_SIZE=$((WORLD_SIZE / (TP_SIZE * CP_SIZE * PP_SIZE)))
+GLOBAL_BATCH_SIZE=$((MICRO_BATCH_SIZE * DP_SIZE * GRADIENT_ACCUMULATION_STEPS))
+
+echo "Batch size configuration:"
+echo "  MICRO_BATCH_SIZE: $MICRO_BATCH_SIZE"
+echo "  GRADIENT_ACCUMULATION_STEPS: $GRADIENT_ACCUMULATION_STEPS"
+echo "  DP_SIZE: $DP_SIZE"
+echo "  GLOBAL_BATCH_SIZE (auto-calculated): $GLOBAL_BATCH_SIZE"
 
 # Data cache path (useful for both mock and real data)
 DATA_CACHE_PATH="${PWD}/benchmark_cache_llama3_8b_fp8"
@@ -125,6 +137,7 @@ DDP_ARGS=(
     --use-distributed-optimizer
     --overlap-grad-reduce
     --overlap-param-gather
+    --no-gradient-accumulation-fusion  # Disable fusion since APEX CUDA extensions not installed
 )
 TRAINING_ARGS+=("${DDP_ARGS[@]}")
 
