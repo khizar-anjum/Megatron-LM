@@ -70,6 +70,7 @@ def run_initial_profiling(
                 print(f"  Node {node_id}: Single GPU (no intra-node comm)")
 
     # Phase 3: Inter-Node Profiling
+    inter_node_bw = None
     if topology.num_nodes > 1:
         if rank == 0 and verbose:
             print("\nPhase 3: Profiling inter-node bandwidth...")
